@@ -1,0 +1,14 @@
+myenv/
+__pycache__/
+*.pyc
+.env
+chatbot.db
+chatbot.db-shm
+chatbot.db-wal
+thread_uploads/
+data/
+streamlit_stdout.log
+streamlit_stderr.log
+PracticeCodes
+Codexnotebook.txt
+ProjectOverview.txt
