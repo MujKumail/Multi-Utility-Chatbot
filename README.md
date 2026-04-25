@@ -73,27 +73,28 @@ LangGraph_Chatbot/
 ├── .gitignore
 └── thread_uploads/
 
-## Environment Variables
+**## Environment Variables**
 
+```text
 Create a .env file locally using .env.example.
 
-## Required variables:
+**## Required variables:**
 
 GROQ_API_KEY=your_groq_api_key
 TAVILY_API_KEY=your_tavily_api_key
 ALPHAVANTAGE_API_KEY=your_alphavantage_api_key
 APP_DATA_DIR=./data
 
-## Notes
+**## Notes**
 
 APP_DATA_DIR controls where the app stores:
 chatbot.db
 uploaded PDFs
 In deployment, this should point to persistent storage.
 
-## Local Setup
+**## Local Setup**
 
-### 1. Clone the repository
+**### 1. Clone the repository**
 
 ```bash
 git clone <your-repo-url>
