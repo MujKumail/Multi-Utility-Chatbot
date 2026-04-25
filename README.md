@@ -1,180 +1,180 @@
-# LangGraph Chatbot
+# 🤖 LangGraph Chatbot
 
-A multi-utility AI chatbot built with **LangGraph**, **Streamlit**, and **Groq**, featuring:
+A multi-utility AI chatbot built with **LangGraph**, **Streamlit**, and **Groq** — featuring persistent multi-thread chat, PDF-based RAG with citations, and a suite of live utility tools.
 
-- multi-chat thread support
-- persistent chat history
-- PDF upload + RAG
-- source citations
-- export chat
-- thread rename/search
-- per-chat document isolation
-- live tools for search, stock, currency, date/time, calculator, and text utilities
+---
 
-## Features
+## ✨ Features
 
-### Chat Features
-- Multiple chat threads
-- Persistent chat names and ordering
-- Rename chats
-- Search/filter past conversations
-- Latest active chat moves to the top
-- Export current chat as TXT or JSON
-- Header actions for `New Chat` and `Export`
+### 💬 Chat
+- Multiple independent chat threads
+- Persistent chat names, ordering, and history
+- Rename chats inline
+- Search and filter past conversations
+- Most recently active chat surfaces to the top
+- Export current chat as **TXT** or **JSON**
+- Header-level actions: `New Chat` and `Export`
 
-### PDF / RAG Features
-- Upload a PDF to a specific chat
-- Ask questions about the uploaded document
-- Source citations with page references
-- Document persists for that chat across refresh/restart
-- Documents are isolated per chat
-- Remove document from a specific chat
+### 📄 PDF / RAG
+- Upload a PDF to any specific chat thread
+- Ask questions grounded in the document's content
+- Source citations with page-level references
+- Document persists across refreshes and restarts
+- Full per-chat document isolation
+- Remove a document from any chat at any time
 
-### Tool Features
-- Live web search
-- Stock price lookup
-- Currency exchange rate
-- Calculator for mathematical expressions
-- Date/time utilities
-- Percentage calculations
-- URL extraction
-- Slug generation
-- String transformations
-- Temperature and distance conversion
+### 🛠️ Live Tools
+| Category | Tools |
+|---|---|
+| **Search** | Live web search |
+| **Finance** | Stock price lookup, currency exchange rates |
+| **Math** | Calculator, percentage calculations |
+| **Utilities** | Date/time, URL extraction, slug generation |
+| **Text** | String transformations, temperature & distance conversion |
 
-### Persistence
-- Chat history stored in SQLite
-- Chat metadata stored in SQLite
+### 💾 Persistence
+- Chat history stored in **SQLite** via LangGraph checkpointing
+- Chat metadata (names, order) stored separately in SQLite
 - Uploaded document metadata stored in SQLite
-- Uploaded PDF files stored on disk
-- Built for persistent storage in deployment
+- PDF files persisted to disk and linked to their chat thread
+- Designed for zero-state-loss on restart or redeployment
 
-## Tech Stack
+---
 
-- **Frontend:** Streamlit
-- **Orchestration:** LangGraph
-- **LLM:** Groq
-- **Embeddings:** HuggingFace
-- **Vector Store:** FAISS
-- **Persistence:** SQLite
-- **Tools:** Tavily, Alpha Vantage, MCP tools
+## 🧰 Tech Stack
 
-## Project Structure
+| Layer | Technology |
+|---|---|
+| Frontend | Streamlit |
+| Orchestration | LangGraph |
+| LLM | Groq |
+| Embeddings | HuggingFace |
+| Vector Store | FAISS |
+| Persistence | SQLite |
+| Tools | Tavily, Alpha Vantage, MCP |
 
-```text
+---
+
+## 📁 Project Structure
+
+```
 LangGraph_Chatbot/
-├── langgraph_rag_backend.py
-├── streamlit_rag_frontend.py
+├── langgraph_rag_backend.py       # LangGraph graph, tools, RAG logic
+├── streamlit_rag_frontend.py      # Streamlit UI
 ├── mcp_server/
-│   └── mcp_server.py
+│   └── mcp_server.py              # MCP tool server
+├── thread_uploads/                # Uploaded PDF storage
 ├── requirements.txt
 ├── render.yaml
 ├── .env.example
-├── .gitignore
-└── thread_uploads/
+└── .gitignore
+```
 
-**## Environment Variables**
+---
 
-```text
-Create a .env file locally using .env.example.
+## ⚙️ Environment Variables
 
-**## Required variables:**
+Copy `.env.example` to `.env` and fill in your keys:
 
+```env
 GROQ_API_KEY=your_groq_api_key
 TAVILY_API_KEY=your_tavily_api_key
 ALPHAVANTAGE_API_KEY=your_alphavantage_api_key
 APP_DATA_DIR=./data
+```
 
-**## Notes**
+> **Note:** `APP_DATA_DIR` controls where the app stores `chatbot.db` and uploaded PDFs. In deployment, point this to a persistent volume.
 
-APP_DATA_DIR controls where the app stores:
-chatbot.db
-uploaded PDFs
-In deployment, this should point to persistent storage.
+---
 
-**## Local Setup**
+## 🚀 Local Setup
 
-**### 1. Clone the repository**
+### 1. Clone the repository
 
 ```bash
 git clone <your-repo-url>
 cd LangGraph_Chatbot
 ```
 
-### 2. Create a virtual environment
+### 2. Create and activate a virtual environment
 
 ```bash
 python -m venv myenv
-```
 
-### 3. Activate the virtual environment
-
-```bash
+# Windows (PowerShell)
 .\myenv\Scripts\Activate.ps1
+
+# macOS / Linux
+source myenv/bin/activate
 ```
 
-### 4. Install dependencies
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 5. Add environment variables
-Create a .env file in the project root.
+### 4. Add environment variables
 
-```env
-GROQ_API_KEY=your_groq_api_key
-TAVILY_API_KEY=your_tavily_api_key
-ALPHAVANTAGE_API_KEY=your_alphavantage_api_key
-```
+Create a `.env` file in the project root (see [Environment Variables](#️-environment-variables) above).
 
-### 6. Run the app
+### 5. Run the app
+
 ```bash
 streamlit run streamlit_rag_frontend.py
 ```
-Or on Windows without activation:
-```bash
-.\myenv\Scripts\streamlit.exe run streamlit_rag_frontend.py
-```
 
-## Deployment
-This project is prepared for Render deployment.
+> On Windows without activating the environment:
+> ```bash
+> .\myenv\Scripts\streamlit.exe run streamlit_rag_frontend.py
+> ```
 
-Why Render?
-The app needs persistent storage for:
-SQLite database
-uploaded PDFs
-Included deployment support
-render.yaml
-persistent disk mount path
-environment variable configuration
-deployment-safe data path with APP_DATA_DIR
+---
 
-## Render Requirements
-Add these environment variables in Render:
+## ☁️ Deployment (Render)
 
-- GROQ_API_KEY
-- TAVILY_API_KEY
-- ALPHAVANTAGE_API_KEY
-- APP_DATA_DIR is already defined in render.yaml:
+This project includes first-class support for [Render](https://render.com) deployment.
 
-## How It Works
+### Why Render?
+
+The app requires persistent storage for the SQLite database and uploaded PDFs — both of which Render supports via mounted persistent disks.
+
+### What's Included
+
+- `render.yaml` with service and disk configuration
+- `APP_DATA_DIR` wired to the persistent disk mount path
+- Deployment-safe data path handling throughout the app
+
+### Required Environment Variables on Render
+
+| Variable | Notes |
+|---|---|
+| `GROQ_API_KEY` | Your Groq API key |
+| `TAVILY_API_KEY` | Your Tavily search key |
+| `ALPHAVANTAGE_API_KEY` | Your Alpha Vantage key |
+| `APP_DATA_DIR` | Already defined in `render.yaml` — do not override |
+
+---
+
+## 🔍 How It Works
 
 ### Chat Persistence
-Chats are stored using LangGraph + SQLite, so thread history survives refreshes and restarts.
+Chat history is stored via LangGraph's SQLite checkpointer, so conversation state survives restarts and redeploys without any extra setup.
 
 ### Thread Metadata
-Chat names and activity order are stored separately in SQLite, so titles do not reset to New chat after refresh.
+Chat names and activity order are maintained in a separate SQLite table. This means thread titles never reset to *"New Chat"* after a refresh — they stay exactly as you named them.
 
 ### Document Persistence
-Uploaded PDFs are saved to disk and linked to their chat thread. Retrievers are rebuilt lazily when needed.
+Uploaded PDFs are saved to disk and linked to their specific thread ID. Vector retrievers are built lazily on first use and rebuilt automatically when the app restarts, ensuring RAG continues to work correctly across sessions.
 
-## Future Improvements
-- User authentication
-- Global document library
-- Multi-document RAG
-- OCR for scanned PDFs
-- Regenerate response
-- Pinned chats
-- Workspaces/folders
+---
 
+## 🔮 Future Improvements
+
+- [ ] User authentication
+- [ ] Global shared document library
+- [ ] Multi-document RAG per thread
+- [ ] OCR support for scanned PDFs
+- [ ] Regenerate / retry last response
+- [ ] Pinned chats
+- [ ] Workspaces and folder organization
