@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 import queue
 import re
@@ -13,7 +14,6 @@ from langgraph_rag_backend import (
     get_thread_metadata,
     get_thread_title,
     ingest_pdf,
-    invalidate_graph_cache,
     rename_thread,
     remove_thread_document,
     retrieve_all_threads,
@@ -257,17 +257,21 @@ uploaded_pdf = st.sidebar.file_uploader(
     key=uploader_key,
 )
 if uploaded_pdf:
-    if uploaded_pdf.name in thread_docs:
+    uploaded_bytes = uploaded_pdf.getvalue()
+    uploaded_hash = hashlib.sha256(uploaded_bytes).hexdigest()
+    existing_doc = thread_docs.get(uploaded_pdf.name)
+
+    if existing_doc and existing_doc.get("file_hash") == uploaded_hash:
         st.sidebar.info(f"{uploaded_pdf.name} already processed for this chat.")
     else:
         with st.sidebar.status("Indexing PDF...", expanded=True) as status_box:
             summary = ingest_pdf(
-                uploaded_pdf.getvalue(),
+                uploaded_bytes,
                 thread_id=thread_key,
                 filename=uploaded_pdf.name,
             )
+            thread_docs.clear()
             thread_docs[uploaded_pdf.name] = summary
-            invalidate_graph_cache(thread_key)
             status_box.update(label="PDF indexed", state="complete", expanded=False)
 
 if thread_docs:
@@ -281,7 +285,6 @@ if thread_docs:
     st.sidebar.success(doc_summary)
     if st.sidebar.button("Remove Document", use_container_width=True):
         remove_thread_document(thread_key)
-        invalidate_graph_cache(thread_key)
         thread_docs.clear()
         st.rerun()
 else:

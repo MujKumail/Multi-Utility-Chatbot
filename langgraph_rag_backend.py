@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -28,6 +30,8 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
+load_dotenv()
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.getenv("APP_DATA_DIR", BASE_DIR)
 DB_PATH = os.path.join(DATA_DIR, "chatbot.db")
@@ -50,10 +54,21 @@ TIME_SENSITIVE_KEYWORDS = {
     "model",
     "models",
 }
+DOCUMENT_QUERY_KEYWORDS = {
+    "document",
+    "pdf",
+    "file",
+    "page",
+    "pages",
+    "uploaded",
+    "upload",
+    "attachment",
+    "attached",
+    "summarize",
+    "summary",
+}
 THREAD_METADATA_TABLE = "thread_metadata"
 THREAD_DOCUMENTS_TABLE = "thread_documents"
-
-load_dotenv()
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
@@ -81,6 +96,26 @@ def is_time_sensitive_query(text: str) -> bool:
     """Return True when a user query likely needs live data."""
     words = {word.strip(".,?!:;()[]{}\"'").lower() for word in text.split()}
     return any(keyword in words for keyword in TIME_SENSITIVE_KEYWORDS)
+
+
+def is_document_query(text: str) -> bool:
+    """Return True when a user query likely refers to the uploaded document."""
+    lowered = text.lower()
+    words = {word.strip(".,?!:;()[]{}\"'").lower() for word in lowered.split()}
+    phrase_hints = (
+        "this document",
+        "the document",
+        "this pdf",
+        "the pdf",
+        "uploaded file",
+        "uploaded document",
+        "what is this document about",
+        "summarize this",
+        "summarize the document",
+    )
+    return any(keyword in words for keyword in DOCUMENT_QUERY_KEYWORDS) or any(
+        phrase in lowered for phrase in phrase_hints
+    )
 
 
 # -------------------
@@ -113,11 +148,61 @@ def get_embeddings() -> HuggingFaceEmbeddings:
 # -------------------
 _THREAD_RETRIEVERS: Dict[str, Any] = {}
 _THREAD_METADATA: Dict[str, dict] = {}
+_MCP_TOOLS_CACHE: list[BaseTool] = []
+_LAST_MCP_FETCH_ATTEMPT = 0.0
+_MCP_FETCH_RETRY_SECONDS = 120.0
 
 
 def _safe_filename(filename: Optional[str]) -> str:
     base_name = os.path.basename(filename or "uploaded.pdf").strip()
     return base_name or "uploaded.pdf"
+
+
+def _load_thread_document_sync(thread_id: str) -> dict:
+    """Load document metadata synchronously to avoid async loop re-entry."""
+    tid = str(thread_id)
+    if tid in _THREAD_METADATA:
+        return _THREAD_METADATA[tid]
+
+    if not os.path.exists(DB_PATH):
+        return {}
+
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        row = conn.execute(
+            f"""
+            SELECT filename, file_path, documents, chunks, uploaded_at, file_hash
+            FROM {THREAD_DOCUMENTS_TABLE}
+            WHERE thread_id = ?
+            """,
+            (tid,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        conn.close()
+        return {}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if row is None:
+        return {}
+
+    metadata = {
+        "filename": row[0],
+        "file_path": row[1],
+        "documents": int(row[2]),
+        "chunks": int(row[3]),
+        "uploaded_at": row[4],
+        "file_hash": row[5] or "",
+    }
+
+    if not os.path.exists(metadata["file_path"]):
+        return {}
+
+    _THREAD_METADATA[tid] = metadata
+    return metadata
 
 
 def _thread_upload_path(thread_id: str, filename: Optional[str]) -> str:
@@ -158,7 +243,7 @@ def _get_retriever(thread_id: Optional[str]):
     if tid in _THREAD_RETRIEVERS:
         return _THREAD_RETRIEVERS[tid]
 
-    metadata = run_async(_load_thread_document(tid))
+    metadata = _load_thread_document_sync(tid)
     file_path = metadata.get("file_path") if metadata else None
     if file_path and os.path.exists(file_path):
         retriever, loaded_meta = _build_retriever_from_pdf(file_path)
@@ -177,6 +262,8 @@ def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None
     """
     if not file_bytes:
         raise ValueError("No bytes received for ingestion.")
+
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
         temp_file.write(file_bytes)
@@ -201,6 +288,7 @@ def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None
             "chunks": summary["chunks"],
             "uploaded_at": upload_time,
             "file_path": saved_path,
+            "file_hash": file_hash,
         }
 
         _THREAD_RETRIEVERS[str(thread_id)] = retriever
@@ -212,6 +300,7 @@ def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None
             "documents": persisted_summary["documents"],
             "chunks": persisted_summary["chunks"],
             "uploaded_at": persisted_summary["uploaded_at"],
+            "file_hash": persisted_summary["file_hash"],
         }
     finally:
         try:
@@ -222,7 +311,7 @@ def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None
 
 def get_thread_metadata(thread_id: str) -> dict:
     """Return PDF metadata for the given thread, or empty dict if none."""
-    metadata = run_async(_load_thread_document(str(thread_id))) or {}
+    metadata = _load_thread_document_sync(str(thread_id)) or {}
     if not metadata:
         return {}
     return {
@@ -230,6 +319,7 @@ def get_thread_metadata(thread_id: str) -> dict:
         "documents": metadata.get("documents"),
         "chunks": metadata.get("chunks"),
         "uploaded_at": metadata.get("uploaded_at"),
+        "file_hash": metadata.get("file_hash", ""),
     }
 
 
@@ -329,10 +419,19 @@ async def _ensure_thread_documents_table() -> None:
             file_path TEXT NOT NULL,
             documents INTEGER NOT NULL,
             chunks INTEGER NOT NULL,
-            uploaded_at TEXT NOT NULL
+            uploaded_at TEXT NOT NULL,
+            file_hash TEXT NOT NULL DEFAULT ''
         )
         """
     )
+    async with _db_conn.execute(
+        f"PRAGMA table_info({THREAD_DOCUMENTS_TABLE})"
+    ) as cursor:
+        columns = [row[1] for row in await cursor.fetchall()]
+    if "file_hash" not in columns:
+        await _db_conn.execute(
+            f"ALTER TABLE {THREAD_DOCUMENTS_TABLE} ADD COLUMN file_hash TEXT NOT NULL DEFAULT ''"
+        )
     await _db_conn.commit()
 
 
@@ -379,7 +478,7 @@ async def _load_thread_document(thread_id: str) -> dict:
 
     async with _db_conn.execute(
         f"""
-        SELECT filename, file_path, documents, chunks, uploaded_at
+        SELECT filename, file_path, documents, chunks, uploaded_at, file_hash
         FROM {THREAD_DOCUMENTS_TABLE}
         WHERE thread_id = ?
         """,
@@ -396,6 +495,7 @@ async def _load_thread_document(thread_id: str) -> dict:
         "documents": int(row[2]),
         "chunks": int(row[3]),
         "uploaded_at": row[4],
+        "file_hash": row[5] or "",
     }
 
     if not os.path.exists(metadata["file_path"]):
@@ -416,14 +516,15 @@ async def _persist_thread_document(thread_id: str, metadata: dict) -> None:
     await _db_conn.execute(
         f"""
         INSERT INTO {THREAD_DOCUMENTS_TABLE}
-            (thread_id, filename, file_path, documents, chunks, uploaded_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (thread_id, filename, file_path, documents, chunks, uploaded_at, file_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(thread_id) DO UPDATE SET
             filename = excluded.filename,
             file_path = excluded.file_path,
             documents = excluded.documents,
             chunks = excluded.chunks,
-            uploaded_at = excluded.uploaded_at
+            uploaded_at = excluded.uploaded_at,
+            file_hash = excluded.file_hash
         """,
         (
             str(thread_id),
@@ -432,6 +533,7 @@ async def _persist_thread_document(thread_id: str, metadata: dict) -> None:
             int(metadata["documents"]),
             int(metadata["chunks"]),
             metadata["uploaded_at"],
+            metadata.get("file_hash", ""),
         ),
     )
     await _db_conn.commit()
@@ -700,7 +802,7 @@ async def _fetch_mcp_tools() -> list[BaseTool]:
     """
     client = MultiServerMCPClient(MCP_SERVER_CONFIG)
     try:
-        tools = await asyncio.wait_for(client.get_tools(), timeout=15.0)
+        tools = await asyncio.wait_for(client.get_tools(), timeout=5.0)
         print(f"MCP tools loaded ({len(tools)}): {[t.name for t in tools]}")
         return tools
     except Exception as exc:
@@ -708,7 +810,22 @@ async def _fetch_mcp_tools() -> list[BaseTool]:
         return []
 
 
-_startup_mcp_tools: list[BaseTool] = run_async(_fetch_mcp_tools())
+def get_mcp_tools() -> list[BaseTool]:
+    """Return cached MCP tools and retry periodically if the cache is empty."""
+    global _MCP_TOOLS_CACHE, _LAST_MCP_FETCH_ATTEMPT
+
+    now = time.time()
+    should_refresh = (
+        not _MCP_TOOLS_CACHE
+        and (now - _LAST_MCP_FETCH_ATTEMPT >= _MCP_FETCH_RETRY_SECONDS)
+    )
+    if should_refresh:
+        _LAST_MCP_FETCH_ATTEMPT = now
+        fetched_tools = run_async(_fetch_mcp_tools())
+        if fetched_tools:
+            _MCP_TOOLS_CACHE = fetched_tools
+
+    return list(_MCP_TOOLS_CACHE)
 
 
 # -------------------
@@ -738,6 +855,7 @@ SYSTEM_PROMPT_TEMPLATE = (
     "calculate_percentage / percentage_change -> percentage calculations\n"
     "extract_urls / slugify_text              -> text utility helpers\n"
     "rag_tool                                 -> answer questions about the uploaded PDF document\n"
+    "If the user asks about the uploaded document, PDF, file contents, summary, pages, or 'this document', use rag_tool before answering.\n"
     "For any time-sensitive question about latest/current/recent/today/newest/prices/releases/models/versions, you must use a live tool first and answer from tool results.\n"
     "Do not answer time-sensitive questions from memory.\n"
     "When rag_tool returns evidence, cite the source file and page number in your answer.\n"
@@ -750,12 +868,10 @@ SYSTEM_PROMPT_TEMPLATE = (
 def build_graph(thread_id: str):
     """
     Build and compile a chatbot graph for a specific thread.
-    Fetches fresh MCP tools each time and injects a rag_tool bound to thread_id.
+    Uses cached MCP tools and injects a rag_tool bound to thread_id.
     """
-    mcp_tools: list[BaseTool] = run_async(_fetch_mcp_tools())
-
     rag_tool = make_rag_tool(thread_id)
-    tools = [search_tool, get_stock_price, *mcp_tools, rag_tool]
+    tools = [search_tool, get_stock_price, *get_mcp_tools(), rag_tool]
     llm_with_tools = llm.bind_tools(tools)
     system_prompt = SystemMessage(content=SYSTEM_PROMPT_TEMPLATE)
 
@@ -777,11 +893,28 @@ def build_graph(thread_id: str):
             cleaned.append(message)
 
         live_data_prompt: list[SystemMessage] = []
+        document_prompt: list[SystemMessage] = []
         last_human = next(
             (message for message in reversed(cleaned) if isinstance(message, HumanMessage)),
             None,
         )
         recent_tool_used = any(isinstance(message, ToolMessage) for message in cleaned)
+        has_document = bool(await _load_thread_document(thread_id))
+        if (
+            last_human
+            and has_document
+            and is_document_query(str(last_human.content))
+            and not recent_tool_used
+        ):
+            document_prompt = [
+                SystemMessage(
+                    content=(
+                        "The current user request is about the uploaded document. "
+                        "You must call rag_tool before answering. "
+                        "Do not answer from memory or general intuition."
+                    )
+                )
+            ]
         if last_human and is_time_sensitive_query(str(last_human.content)) and not recent_tool_used:
             live_data_prompt = [
                 SystemMessage(
@@ -794,16 +927,19 @@ def build_graph(thread_id: str):
             ]
 
         try:
-            response = await llm_with_tools.ainvoke([system_prompt] + live_data_prompt + cleaned)
-            if live_data_prompt and not getattr(response, "tool_calls", None):
+            response = await llm_with_tools.ainvoke(
+                [system_prompt] + document_prompt + live_data_prompt + cleaned
+            )
+            if (document_prompt or live_data_prompt) and not getattr(response, "tool_calls", None):
                 response = await llm_with_tools.ainvoke(
                     [
                         system_prompt,
+                        *document_prompt,
                         *live_data_prompt,
                         SystemMessage(
                             content=(
-                                "You still need live verification. "
-                                "Do not answer yet. Call a live tool now."
+                                "You still need tool-based verification. "
+                                "Do not answer yet. Call the required tool now."
                             )
                         ),
                         *cleaned,
@@ -814,7 +950,9 @@ def build_graph(thread_id: str):
                 print("Tool call failed, retrying with clean context...")
                 last_human_messages = [m for m in cleaned if isinstance(m, HumanMessage)]
                 retry_msgs = [last_human_messages[-1]] if last_human_messages else cleaned[-1:]
-                response = await llm_with_tools.ainvoke([system_prompt] + live_data_prompt + retry_msgs)
+                response = await llm_with_tools.ainvoke(
+                    [system_prompt] + document_prompt + live_data_prompt + retry_msgs
+                )
             else:
                 raise
 
@@ -840,7 +978,9 @@ _db_conn: aiosqlite.Connection | None = None
 
 async def _init_checkpointer() -> AsyncSqliteSaver:
     global _db_conn
-    _db_conn = await aiosqlite.connect(database=DB_PATH)
+    _db_conn = await aiosqlite.connect(database=DB_PATH, timeout=30)
+    await _db_conn.execute("PRAGMA busy_timeout = 30000")
+    await _db_conn.execute("PRAGMA journal_mode = WAL")
     await _ensure_thread_metadata_table()
     await _ensure_thread_documents_table()
     return AsyncSqliteSaver(_db_conn)
