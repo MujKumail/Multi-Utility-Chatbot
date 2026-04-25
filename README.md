@@ -74,15 +74,18 @@ LangGraph_Chatbot/
 └── thread_uploads/
 
 ## Environment Variables
+
 Create a .env file locally using .env.example.
 
 ## Required variables:
+
 GROQ_API_KEY=your_groq_api_key
 TAVILY_API_KEY=your_tavily_api_key
 ALPHAVANTAGE_API_KEY=your_alphavantage_api_key
 APP_DATA_DIR=./data
 
 ## Notes
+
 APP_DATA_DIR controls where the app stores:
 chatbot.db
 uploaded PDFs
@@ -91,22 +94,26 @@ In deployment, this should point to persistent storage.
 ## Local Setup
 
 ### 1. Clone the repository
+
 ```bash
 git clone <your-repo-url>
 cd LangGraph_Chatbot
 ```
 
 ### 2. Create a virtual environment
+
 ```bash
 python -m venv myenv
 ```
 
 ### 3. Activate the virtual environment
+
 ```bash
 .\myenv\Scripts\Activate.ps1
 ```
 
 ### 4. Install dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
